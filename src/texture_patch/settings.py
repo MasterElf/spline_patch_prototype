@@ -19,6 +19,8 @@ class OptimizationSettings:
     steps_per_tick: int = 5
     timer_interval_ms: int = 30
     min_step_size: float = 0.1
+    # Adaptive step: effective_step = min(step_size, max_residual * residual_step_fraction)
+    residual_step_fraction: float = 0.10
 
 
 @dataclass(frozen=True)

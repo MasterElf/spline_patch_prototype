@@ -1,8 +1,16 @@
 """Residual calculation and hill-climb optimizer.
 
-The optimizer perturbs all 25 spline control nodes by Gaussian noise scaled
-by step_size.  A perturbation is accepted only if it strictly improves the
-total sum-of-squares residual (basic hill climb; never accepts a worse step).
+The optimizer perturbs all 25 spline control nodes by Gaussian noise.  The
+standard deviation used each iteration is an *adaptive* effective step size:
+
+    effective_step = min(configured_step_size, max_residual_length * residual_step_fraction)
+
+This lets the perturbation shrink automatically as the patch converges,
+making it easier to fine-tune near the solution.  The configured step_size
+is the upper bound and is never overwritten.
+
+A perturbation is accepted only if it strictly improves the total
+sum-of-squares residual (basic hill climb; never accepts a worse step).
 """
 
 from __future__ import annotations
@@ -37,6 +45,7 @@ class OptimizationStepResult:
     iteration: int
     accepted: bool
     best_score: float
+    effective_step_size: float
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +84,21 @@ class ResidualCalculator:
             total += float(np.dot(diff, diff))
         return total
 
+    @staticmethod
+    def compute_max_residual_length(patch: SplinePatch, texture: TextureData) -> float:
+        """Return the length of the single largest residual vector.
+
+        Returns 0.0 when there are no intersections or all residuals are zero.
+        """
+        max_len = 0.0
+        for intersection in texture.intersections:
+            warped = patch.evaluate(intersection.uv)
+            diff = intersection.reference_world_point - warped
+            length = float(np.sqrt(np.dot(diff, diff)))
+            if length > max_len:
+                max_len = length
+        return max_len
+
 
 # ---------------------------------------------------------------------------
 # Hill-climb optimizer
@@ -97,16 +121,19 @@ class HillClimbOptimizer:
         texture: TextureData,
         random_seed: int | None = None,
         step_size: float = 5.0,
+        residual_step_fraction: float = 0.10,
     ) -> None:
         self._patch = patch
         self._texture = texture
         self._step_size = step_size
+        self._residual_step_fraction = float(residual_step_fraction)
         self._rng = np.random.default_rng(random_seed)
 
         self._best_nodes = patch.copy_nodes()
         self._best_score = ResidualCalculator.compute_total_residual(patch, texture)
         self._iteration = 0
         self._accepted_count = 0
+        self._last_effective_step_size: float = step_size
 
     # ------------------------------------------------------------------
     # Properties
@@ -132,6 +159,11 @@ class HillClimbOptimizer:
     def step_size(self, value: float) -> None:
         self._step_size = max(float(value), 1e-6)
 
+    @property
+    def effective_step_size(self) -> float:
+        """The actual step size used in the most recent call to step()."""
+        return self._last_effective_step_size
+
     # ------------------------------------------------------------------
     # Core step
     # ------------------------------------------------------------------
@@ -139,12 +171,29 @@ class HillClimbOptimizer:
     def step(self) -> OptimizationStepResult:
         """Run one hill-climb iteration.
 
-        Returns an OptimizationStepResult with iteration count, whether the
-        step was accepted, and the current best score.
+        The perturbation standard deviation is the adaptive effective step size:
+
+            effective_step = min(step_size, max_residual_length * residual_step_fraction)
+
+        This shrinks automatically as the patch converges.  The configured
+        step_size is never modified.
+
+        Returns an OptimizationStepResult with iteration count, acceptance
+        flag, best score, and the effective step size used this iteration.
         """
         self._iteration += 1
 
-        perturbation = self._rng.normal(0.0, self._step_size, self._best_nodes.shape)
+        # Always perturb from the current best position.
+        self._patch.set_nodes(self._best_nodes)
+
+        # Compute adaptive step size from the best-known state.
+        max_residual = ResidualCalculator.compute_max_residual_length(
+            self._patch, self._texture
+        )
+        effective_step = min(self._step_size, max_residual * self._residual_step_fraction)
+        self._last_effective_step_size = effective_step
+
+        perturbation = self._rng.normal(0.0, effective_step, self._best_nodes.shape)
         candidate_nodes = self._best_nodes + perturbation
 
         self._patch.set_nodes(candidate_nodes)
@@ -156,7 +205,7 @@ class HillClimbOptimizer:
             accepted = True
             self._accepted_count += 1
         else:
-            # Reject: restore best nodes
+            # Reject: restore best nodes.
             self._patch.set_nodes(self._best_nodes)
             accepted = False
 
@@ -164,6 +213,7 @@ class HillClimbOptimizer:
             iteration=self._iteration,
             accepted=accepted,
             best_score=self._best_score,
+            effective_step_size=effective_step,
         )
 
     # ------------------------------------------------------------------
