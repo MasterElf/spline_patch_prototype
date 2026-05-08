@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_geometry_contract.py tests/test_spline_contract.py tests/test_optimizer_contract.py tests/test_reference_grid_contract.py -v)",
+      "Bash(.venv/Scripts/python -m pytest -v)",
+      "Bash(.venv/Scripts/python -c \"from texture_patch.views.main_window import MainWindow; print\\('imports OK'\\)\")"
+    ]
+  }
+}

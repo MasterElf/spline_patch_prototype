@@ -1,0 +1,5 @@
+cd C:\git\spline_patch_prototype
+.\.venv\Scripts\Activate.ps1
+python -m pip install PySide6 numpy
+$env:PYTHONPATH = "$PWD\src"
+python -m texture_patch.app
